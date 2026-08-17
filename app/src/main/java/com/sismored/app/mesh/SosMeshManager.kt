@@ -1,7 +1,56 @@
-private var tiempoInicioMovimiento: Long = 0
+package com.sismored.app.mesh
+
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.*
+import android.content.Context
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.ParcelUuid
+import androidx.core.app.ActivityCompat
+import java.util.UUID
+import kotlin.math.sqrt
+
+data class SenalVecino(
+    val id: String,
+    val latitud: Double,
+    val longitud: Double,
+    val necesitaAyuda: Boolean
+)
+
+class SosMeshManager(private val context: Context) {
+
+    companion object {
+        val SERVICE_UUID: UUID = UUID.fromString("0000b00b-0000-1000-8000-00805f9b34fb")
+        private const val UMBRAL_SISMO = 18f
+    }
+
+    private val bluetoothManager =
+        context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    private var bleScanner: BluetoothLeScanner? = null
+    private var bleAdvertiser: BluetoothLeAdvertiser? = null
+    private var escaneando = false
+
+    private var miLatitud: Double = 0.0
+    private var miLongitud: Double = 0.0
+
+    private val vecinosDetectados = mutableMapOf<String, SenalVecino>()
+
+    var onVecinosActualizados: ((Int) -> Unit)? = null
+    var onSenalRecibida: ((SenalVecino) -> Unit)? = null
+    var onSismoDetectado: (() -> Unit)? = null
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    private var tiempoInicioMovimiento: Long = 0
     private var contadorPicos = 0
-    private val DURACION_MINIMA_MS = 3000 // 3 segundos de movimiento sostenido
-    private val PICOS_MINIMOS = 5 // al menos 5 picos de aceleración en ese tiempo
+    private val DURACION_MINIMA_MS = 3000
+    private val PICOS_MINIMOS = 5
 
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
@@ -17,14 +66,13 @@ private var tiempoInicioMovimiento: Long = 0
                     contadorPicos++
                     if (ahora - tiempoInicioMovimiento > DURACION_MINIMA_MS) {
                         if (contadorPicos >= PICOS_MINIMOS) {
-                            callbackSismoDetectado?.invoke()
+                            onSismoDetectado?.invoke()
                         }
                         tiempoInicioMovimiento = 0
                         contadorPicos = 0
                     }
                 }
             } else {
-                // Si pasan más de 1.5s sin picos, se reinicia la cuenta (fue un golpe aislado)
                 if (tiempoInicioMovimiento != 0L &&
                     System.currentTimeMillis() - tiempoInicioMovimiento > 1500 &&
                     contadorPicos < PICOS_MINIMOS) {
@@ -35,3 +83,68 @@ private var tiempoInicioMovimiento: Long = 0
         }
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
+
+    private fun activarDeteccionSismo() {
+        val acelerometro = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        sensorManager.registerListener(sensorListener, acelerometro, SensorManager.SENSOR_DELAY_NORMAL)
+    }
+
+    fun actualizarUbicacion(lat: Double, lon: Double) {
+        miLatitud = lat
+        miLongitud = lon
+    }
+
+    fun enviarSos(lat: Double, lon: Double) {
+        actualizarUbicacion(lat, lon)
+        emitirSenal(necesitaAyuda = true)
+    }
+
+    private fun tienePermisoBluetooth(): Boolean {
+        return ActivityCompat.checkSelfPermission(
+            context, Manifest.permission.BLUETOOTH_SCAN
+        ) == PackageManager.PERMISSION_GRANTED &&
+        ActivityCompat.checkSelfPermission(
+            context, Manifest.permission.BLUETOOTH_ADVERTISE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun construirPayload(necesitaAyuda: Boolean): ByteArray {
+        val latInt = (miLatitud * 100000).toInt()
+        val lonInt = (miLongitud * 100000).toInt()
+        val estado: Byte = if (necesitaAyuda) 1 else 0
+        val buffer = java.nio.ByteBuffer.allocate(9)
+        buffer.putInt(latInt)
+        buffer.putInt(lonInt)
+        buffer.put(estado)
+        return buffer.array()
+    }
+
+    private fun leerPayload(data: ByteArray): Triple<Double, Double, Boolean> {
+        val buffer = java.nio.ByteBuffer.wrap(data)
+        val lat = buffer.int / 100000.0
+        val lon = buffer.int / 100000.0
+        val ayuda = buffer.get().toInt() == 1
+        return Triple(lat, lon, ayuda)
+    }
+
+    fun iniciarRed() {
+        if (escaneando || !tienePermisoBluetooth()) return
+        bleScanner = bluetoothAdapter?.bluetoothLeScanner
+        bleScanner?.startScan(
+            listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()),
+            ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build(),
+            scanCallback
+        )
+        escaneando = true
+        activarDeteccionSismo()
+        emitirSenal(necesitaAyuda = false)
+    }
+
+    private fun emitirSenal(necesitaAyuda: Boolean) {
+        if (!tienePermisoBluetooth()) return
+        bleAdvertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(false)
