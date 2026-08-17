@@ -43,7 +43,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.activity:activity-compose:1.9.0")
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
