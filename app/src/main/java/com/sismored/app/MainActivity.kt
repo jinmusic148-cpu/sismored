@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.location.LocationServices
+import com.sismored.app.mesh.SenalVecino
 import com.sismored.app.mesh.SosForegroundService
 import com.sismored.app.mesh.SosMeshManager
 import com.sismored.app.ui.theme.*
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
     private val estadoPermisos = mutableStateOf(false)
     private val vecinosConectados = mutableStateOf(0)
     private val sosActivo = mutableStateOf(false)
+    private val listaVecinos = mutableStateListOf<SenalVecino>()
 
     private val lanzadorPermisos = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -66,12 +68,18 @@ class MainActivity : ComponentActivity() {
 
         meshManager = SosMeshManager(applicationContext)
         meshManager.onVecinosActualizados = { cantidad -> vecinosConectados.value = cantidad }
+        meshManager.onSenalRecibida = { senal ->
+            val index = listaVecinos.indexOfFirst { it.id == senal.id }
+            if (index >= 0) listaVecinos[index] = senal else listaVecinos.add(senal)
+        }
+        meshManager.onSismoDetectado = { enviarSos() }
 
         setContent {
             SismoRedTheme {
                 PantallaPrincipal(
                     permisosConcedidos = estadoPermisos.value,
                     vecinos = vecinosConectados.value,
+                    listaVecinos = listaVecinos,
                     sosActivo = sosActivo.value,
                     onPedirPermisos = { lanzadorPermisos.launch(permisosNecesarios) },
                     onEnviarSos = { enviarSos() }
@@ -121,6 +129,7 @@ class MainActivity : ComponentActivity() {
 fun PantallaPrincipal(
     permisosConcedidos: Boolean,
     vecinos: Int,
+    listaVecinos: List<SenalVecino>,
     sosActivo: Boolean,
     onPedirPermisos: () -> Unit,
     onEnviarSos: () -> Unit
@@ -154,6 +163,8 @@ fun PantallaPrincipal(
                 TarjetaPermisos(onPedirPermisos)
             } else {
                 TarjetaEstado(vecinos)
+                Spacer(Modifier.height(16.dp))
+                ListaVecinos(listaVecinos)
                 Spacer(Modifier.height(28.dp))
                 BotonSos(sosActivo, onEnviarSos)
                 if (sosActivo) {
@@ -206,6 +217,26 @@ private fun TarjetaEstado(vecinos: Int) {
             if (vecinos > 0) "Red activa — $vecinos dispositivos cerca" else "Buscando dispositivos cercanos…",
             color = Texto, fontSize = 13.sp
         )
+    }
+}
+
+@Composable
+private fun ListaVecinos(vecinos: List<SenalVecino>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        vecinos.forEach { vecino ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(if (vecino.necesitaAyuda) "🆘" else "✅", fontSize = 18.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Lat: ${"%.4f".format(vecino.latitud)}, Lon: ${"%.4f".format(vecino.longitud)}",
+                    color = TextoTenue,
+                    fontSize = 13.sp
+                )
+            }
+        }
     }
 }
 
