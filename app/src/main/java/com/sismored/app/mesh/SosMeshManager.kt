@@ -148,3 +148,38 @@ class SosMeshManager(private val context: Context) {
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .setConnectable(false)
+            .build()
+
+        val data = AdvertiseData.Builder()
+            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .addServiceData(ParcelUuid(SERVICE_UUID), construirPayload(necesitaAyuda))
+            .build()
+
+        bleAdvertiser?.stopAdvertising(advertiseCallback)
+        bleAdvertiser?.startAdvertising(settings, data, advertiseCallback)
+    }
+
+    private val advertiseCallback = object : AdvertiseCallback() {}
+
+    fun detenerRed() {
+        if (tienePermisoBluetooth()) {
+            bleScanner?.stopScan(scanCallback)
+            bleAdvertiser?.stopAdvertising(advertiseCallback)
+        }
+        sensorManager.unregisterListener(sensorListener)
+        escaneando = false
+        vecinosDetectados.clear()
+    }
+
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val datos = result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
+            val (lat, lon, ayuda) = leerPayload(datos)
+            val id = result.device.address
+            val senal = SenalVecino(id, lat, lon, ayuda)
+            vecinosDetectados[id] = senal
+            onVecinosActualizados?.invoke(vecinosDetectados.size)
+            onSenalRecibida?.invoke(senal)
+        }
+    }
+}
